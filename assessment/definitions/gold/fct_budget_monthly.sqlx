@@ -1,0 +1,19 @@
+config {
+  type: "table",
+  schema: "gold",
+  description: "Monthly payroll budget. Grain: one row per department per month.",
+  assertions: {
+    uniqueKey: ["department_id", "month_start_date"],
+    nonNull: ["department_id", "month_start_date", "budgeted_gross_payroll_usd"]
+  }
+}
+
+SELECT
+  CONCAT(department_id, '|', FORMAT_DATE('%Y-%m', month_start_date)) AS budget_key,
+  department_id,
+  month_start_date,
+  fiscal_year,
+  fiscal_period,
+  budgeted_gross_payroll_usd,
+  budgeted_headcount
+FROM ${ref("stg_budget")}

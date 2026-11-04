@@ -1,0 +1,37 @@
+config {
+  type: "table",
+  schema: "gold",
+  description: "Date dimension with the client fiscal calendar. Fiscal year runs July 1 to June 30 and is named after the calendar year in which it ends (FY2026 = Jul 2025 - Jun 2026).",
+  assertions: {
+    uniqueKey: ["calendar_date"]
+  }
+}
+
+WITH days AS (
+  SELECT d AS calendar_date
+  FROM UNNEST(GENERATE_DATE_ARRAY(DATE '2024-07-01', DATE '2028-06-30', INTERVAL 1 DAY)) AS d
+),
+
+fiscal AS (
+  SELECT
+    calendar_date,
+    DATE_TRUNC(calendar_date, MONTH)                         AS month_start_date,
+    LAST_DAY(calendar_date, MONTH)                           AS month_end_date,
+    EXTRACT(YEAR FROM DATE_ADD(calendar_date, INTERVAL 6 MONTH)) AS fiscal_year_num,
+    MOD(EXTRACT(MONTH FROM calendar_date) + 5, 12) + 1       AS fiscal_period
+  FROM days
+)
+
+SELECT
+  calendar_date,
+  month_start_date,
+  month_end_date,
+  calendar_date = month_end_date                                   AS is_month_end,
+  fiscal_year_num,
+  CONCAT('FY', CAST(fiscal_year_num AS STRING))                    AS fiscal_year,
+  fiscal_period,
+  DIV(fiscal_period - 1, 3) + 1                                    AS fiscal_quarter_num,
+  CONCAT('FY', CAST(fiscal_year_num AS STRING), '-Q', CAST(DIV(fiscal_period - 1, 3) + 1 AS STRING)) AS fiscal_quarter,
+  MOD(fiscal_period, 3) = 0                                        AS is_fiscal_quarter_end_month,
+  fiscal_period = 12                                               AS is_fiscal_year_end_month
+FROM fiscal

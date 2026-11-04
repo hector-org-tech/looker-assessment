@@ -1,0 +1,39 @@
+config {
+  type: "table",
+  schema: "gold",
+  description: "Employee dimension. Grain: ONE current row per employee (latest snapshot). Test accounts removed. For the department on a past date, join dim_employee_department_history.",
+  assertions: {
+    uniqueKey: ["employee_id"],
+    nonNull: ["employee_id", "current_department_id", "employment_type", "hire_date"]
+  },
+  columns: {
+    annual_salary_usd: "CONFIDENTIAL. Individual pay. Exposed in Looker only to HR and Finance.",
+    hourly_rate_usd: "CONFIDENTIAL. Individual pay. Exposed in Looker only to HR and Finance.",
+    is_headcount_eligible: "Full-time or part-time. Contractors never count in headcount."
+  }
+}
+
+SELECT
+  s.employee_id,
+  s.first_name,
+  s.last_name,
+  CONCAT(s.first_name, ' ', s.last_name)                AS full_name,
+  s.email,
+  h.department_id                                       AS current_department_id,
+  s.job_title,
+  s.employment_type,
+  s.flsa_status,
+  s.employment_type IN ('FULL_TIME', 'PART_TIME')       AS is_headcount_eligible,
+  s.hire_date,
+  s.termination_date,
+  s.termination_reason,
+  s.location_state,
+  s.annual_salary_usd,
+  s.hourly_rate_usd,
+  s.loaded_at                                           AS last_snapshot_at
+FROM ${ref("stg_employee_snapshots")} AS s
+JOIN ${ref("dim_employee_department_history")} AS h
+  ON h.employee_id = s.employee_id
+ AND h.is_current
+WHERE s.snapshot_rank = 1
+  AND NOT s.is_test_account

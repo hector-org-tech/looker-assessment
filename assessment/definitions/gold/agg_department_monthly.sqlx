@@ -1,0 +1,155 @@
+config {
+  type: "table",
+  schema: "gold",
+  description: "Monthly summary by department: the table behind the executive dashboard. Grain: one row per department per calendar month (dense: every department appears in every month of the reporting window). Each metric is computed at its own grain BEFORE joining, so nothing fans out.",
+  assertions: {
+    uniqueKey: ["department_month_key"],
+    nonNull: ["department_month_key", "department_id", "month_start_date", "fiscal_year", "fiscal_quarter"]
+  },
+  columns: {
+    gross_payroll_usd: "Sum of valid earning lines whose pay_date falls in the month, charged to this department (department for cost).",
+    employer_cost_usd: "Sum of employer contributions of the pay runs paid in the month, charged to the same cost center as the employee's lines.",
+    headcount_month_end: "Full-time + part-time employees active on the last day of the month, by home department on that day. SEMI-ADDITIVE: never sum across months.",
+    voluntary_terminations: "Employees with termination_reason = VOLUNTARY whose termination_date falls in the month.",
+    pay_runs_in_month: "Number of biweekly pay runs paid in the calendar month (2 or 3). Same value for every department.",
+    budgeted_gross_payroll_usd: "Monthly budget from budget.csv. NULL when no budget exists for the month.",
+    gross_payroll_usd_prior_quarter: "Same metric 3 months earlier. Summed over the months of a fiscal quarter it gives the previous quarter total.",
+    gross_payroll_usd_prior_year: "Same metric 12 months earlier. Summed over any set of months it gives the same period last year."
+  }
+}
+
+WITH bounds AS (
+  SELECT DATE_TRUNC(MIN(pay_date), MONTH) AS first_month, DATE_TRUNC(MAX(pay_date), MONTH) AS last_month
+  FROM ${ref("fct_payroll_lines")}
+),
+
+spine AS (
+  SELECT d.department_id, m AS month_start_date
+  FROM ${ref("dim_department")} AS d
+  CROSS JOIN bounds
+  CROSS JOIN UNNEST(GENERATE_DATE_ARRAY(bounds.first_month, bounds.last_month, INTERVAL 1 MONTH)) AS m
+),
+
+pay_runs AS (
+  -- Biweekly payroll: most months have 2 pay dates, two months a year have 3.
+  -- Because gross payroll is assigned to the month of pay_date, those months look
+  -- ~50% more expensive. Exposed so the dashboard can flag them.
+  SELECT pay_month AS month_start_date, COUNT(DISTINCT pay_run_id) AS pay_runs_in_month
+  FROM ${ref("fct_payroll_lines")}
+  GROUP BY 1
+),
+
+earnings AS (
+  SELECT
+    department_id,
+    pay_month AS month_start_date,
+    SUM(amount_usd)                                           AS gross_payroll_usd,
+    SUM(IF(earning_type = 'REGULAR',  amount_usd, 0))         AS regular_earnings_usd,
+    SUM(IF(earning_type = 'OVERTIME', amount_usd, 0))         AS overtime_earnings_usd,
+    SUM(IF(earning_type = 'PTO',      amount_usd, 0))         AS pto_earnings_usd,
+    SUM(IF(earning_type = 'BONUS',    amount_usd, 0))         AS bonus_earnings_usd,
+    SUM(IF(earning_type = 'OVERTIME', hours, 0))              AS overtime_hours,
+    SUM(IF(earning_type = 'REGULAR',  hours, 0))              AS regular_hours
+  FROM ${ref("fct_payroll_lines")}
+  GROUP BY 1, 2
+),
+
+contributions AS (
+  SELECT
+    department_id,
+    pay_month AS month_start_date,
+    SUM(amount_usd)                                                 AS employer_cost_usd,
+    SUM(IF(contribution_type = 'FICA', amount_usd, 0))              AS fica_usd,
+    SUM(IF(contribution_type = 'HEALTH_INSURANCE', amount_usd, 0))  AS health_insurance_usd,
+    SUM(IF(contribution_type = 'RETIREMENT_MATCH', amount_usd, 0))  AS retirement_match_usd
+  FROM ${ref("fct_employer_contributions")}
+  GROUP BY 1, 2
+),
+
+headcount AS (
+  SELECT
+    department_id,
+    month_start_date,
+    COUNT(*)                                     AS headcount_month_end,
+    COUNTIF(employment_type = 'FULL_TIME')       AS full_time_headcount_month_end,
+    COUNTIF(employment_type = 'PART_TIME')       AS part_time_headcount_month_end
+  FROM ${ref("fct_workforce_month_end")}
+  GROUP BY 1, 2
+),
+
+terminations AS (
+  SELECT
+    department_id,
+    termination_month AS month_start_date,
+    COUNTIF(is_voluntary)  AS voluntary_terminations,
+    COUNT(*)               AS total_terminations
+  FROM ${ref("fct_terminations")}
+  GROUP BY 1, 2
+),
+
+base AS (
+  SELECT
+    s.department_id,
+    s.month_start_date,
+    COALESCE(e.gross_payroll_usd, 0)          AS gross_payroll_usd,
+    COALESCE(e.regular_earnings_usd, 0)       AS regular_earnings_usd,
+    COALESCE(e.overtime_earnings_usd, 0)      AS overtime_earnings_usd,
+    COALESCE(e.pto_earnings_usd, 0)           AS pto_earnings_usd,
+    COALESCE(e.bonus_earnings_usd, 0)         AS bonus_earnings_usd,
+    COALESCE(e.overtime_hours, 0)             AS overtime_hours,
+    COALESCE(e.regular_hours, 0)              AS regular_hours,
+    COALESCE(c.employer_cost_usd, 0)          AS employer_cost_usd,
+    COALESCE(c.fica_usd, 0)                   AS fica_usd,
+    COALESCE(c.health_insurance_usd, 0)       AS health_insurance_usd,
+    COALESCE(c.retirement_match_usd, 0)       AS retirement_match_usd,
+    COALESCE(h.headcount_month_end, 0)        AS headcount_month_end,
+    COALESCE(h.full_time_headcount_month_end, 0) AS full_time_headcount_month_end,
+    COALESCE(h.part_time_headcount_month_end, 0) AS part_time_headcount_month_end,
+    COALESCE(t.voluntary_terminations, 0)     AS voluntary_terminations,
+    COALESCE(t.total_terminations, 0)         AS total_terminations,
+    b.budgeted_gross_payroll_usd,
+    b.budgeted_headcount
+  FROM spine AS s
+  LEFT JOIN earnings      AS e USING (department_id, month_start_date)
+  LEFT JOIN contributions AS c USING (department_id, month_start_date)
+  LEFT JOIN headcount     AS h USING (department_id, month_start_date)
+  LEFT JOIN terminations  AS t USING (department_id, month_start_date)
+  LEFT JOIN ${ref("fct_budget_monthly")} AS b USING (department_id, month_start_date)
+)
+
+SELECT
+  CONCAT(cur.department_id, '|', FORMAT_DATE('%Y-%m', cur.month_start_date)) AS department_month_key,
+  cur.*,
+  cur.gross_payroll_usd + cur.employer_cost_usd             AS fully_loaded_cost_usd,
+  pr.pay_runs_in_month,
+  LAST_DAY(cur.month_start_date, MONTH)                      AS month_end_date,
+  cal.fiscal_year,
+  cal.fiscal_year_num,
+  cal.fiscal_quarter,
+  cal.fiscal_quarter_num,
+  cal.fiscal_period,
+  cal.is_fiscal_quarter_end_month,
+  cal.is_fiscal_year_end_month,
+
+  -- Prior-period comparison columns (NULL when the earlier month is outside the data window).
+  pq.gross_payroll_usd                                       AS gross_payroll_usd_prior_quarter,
+  pq.overtime_earnings_usd                                   AS overtime_earnings_usd_prior_quarter,
+  pq.gross_payroll_usd + pq.employer_cost_usd                AS fully_loaded_cost_usd_prior_quarter,
+  pq.headcount_month_end                                     AS headcount_month_end_prior_quarter,
+  pq.voluntary_terminations                                  AS voluntary_terminations_prior_quarter,
+  py.gross_payroll_usd                                       AS gross_payroll_usd_prior_year,
+  py.overtime_earnings_usd                                   AS overtime_earnings_usd_prior_year,
+  py.gross_payroll_usd + py.employer_cost_usd                AS fully_loaded_cost_usd_prior_year,
+  py.headcount_month_end                                     AS headcount_month_end_prior_year,
+  py.voluntary_terminations                                  AS voluntary_terminations_prior_year
+FROM base AS cur
+JOIN ${ref("dim_fiscal_calendar")} AS cal
+  ON cal.calendar_date = cur.month_start_date
+LEFT JOIN pay_runs AS pr
+  ON pr.month_start_date = cur.month_start_date
+LEFT JOIN base AS pq
+  ON pq.department_id = cur.department_id
+ AND pq.month_start_date = DATE_SUB(cur.month_start_date, INTERVAL 3 MONTH)
+LEFT JOIN base AS py
+  ON py.department_id = cur.department_id
+ AND py.month_start_date = DATE_SUB(cur.month_start_date, INTERVAL 12 MONTH)

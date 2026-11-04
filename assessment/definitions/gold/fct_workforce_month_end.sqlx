@@ -1,0 +1,37 @@
+config {
+  type: "table",
+  schema: "gold",
+  description: "Headcount snapshot. Grain: one row per headcount-eligible employee (full-time or part-time) who is ACTIVE on the last day of a month. Active = hire_date <= month end AND (no termination_date OR termination_date > month end). The department is the home department on that day.",
+  assertions: {
+    uniqueKey: ["employee_id", "month_end_date"],
+    nonNull: ["employee_id", "month_end_date", "department_id"]
+  }
+}
+
+WITH bounds AS (
+  -- Reporting window = months covered by payroll data (Jul 2025 - Sep 2026 today).
+  SELECT DATE_TRUNC(MIN(pay_date), MONTH) AS first_month, DATE_TRUNC(MAX(pay_date), MONTH) AS last_month
+  FROM ${ref("fct_payroll_lines")}
+),
+
+months AS (
+  SELECT LAST_DAY(m, MONTH) AS month_end_date
+  FROM bounds, UNNEST(GENERATE_DATE_ARRAY(first_month, last_month, INTERVAL 1 MONTH)) AS m
+)
+
+SELECT
+  e.employee_id,
+  m.month_end_date,
+  DATE_TRUNC(m.month_end_date, MONTH) AS month_start_date,
+  h.department_id,
+  e.employment_type,
+  e.flsa_status,
+  e.job_title
+FROM months AS m
+JOIN ${ref("dim_employee")} AS e
+  ON e.is_headcount_eligible
+ AND e.hire_date <= m.month_end_date
+ AND (e.termination_date IS NULL OR e.termination_date > m.month_end_date)
+JOIN ${ref("dim_employee_department_history")} AS h
+  ON h.employee_id = e.employee_id
+ AND m.month_end_date BETWEEN h.valid_from AND h.valid_to

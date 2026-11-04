@@ -1,0 +1,70 @@
+config {
+  type: "table",
+  schema: "gold",
+  description: "Employer contributions fact. Grain: one row per pay run, employee and contribution type (FICA, HEALTH_INSURANCE, RETIREMENT_MATCH). Test accounts removed. Assigned to the month of the pay run's pay_date and to the cost center charged on that employee's lines in the same run.",
+  bigquery: {
+    partitionBy: "DATE_TRUNC(pay_date, MONTH)",
+    clusterBy: ["department_id"]
+  },
+  assertions: {
+    uniqueKey: ["contribution_id"],
+    nonNull: ["contribution_id", "pay_run_id", "employee_id", "department_id", "pay_date", "amount_usd"]
+  },
+  columns: {
+    department_source: "VALID_LINES (cost center on the employee's valid lines in that run), RUN_LINES (only voided lines in that run), or HOME_DEPARTMENT (no lines at all: department from history on pay_date)."
+  }
+}
+
+WITH run_dates AS (
+  SELECT pay_run_id, MAX(pay_date) AS pay_date
+  FROM ${ref("stg_payroll_lines")}
+  GROUP BY pay_run_id
+),
+
+valid_line_department AS (
+  SELECT pay_run_id, employee_id, ANY_VALUE(department_id) AS department_id
+  FROM ${ref("fct_payroll_lines")}
+  GROUP BY pay_run_id, employee_id
+),
+
+any_line_department AS (
+  -- Some employee/run pairs only have lines that were later voided; the employer still
+  -- paid the contribution, so we keep it and charge the same cost center.
+  SELECT pay_run_id, employee_id, ANY_VALUE(department_id) AS department_id
+  FROM ${ref("stg_payroll_lines")}
+  WHERE ingestion_rank = 1
+  GROUP BY pay_run_id, employee_id
+),
+
+contributions AS (
+  SELECT *
+  FROM ${ref("stg_employer_contributions")}
+  WHERE NOT is_test_account
+  -- defensive de-duplication: the uniqueness of the raw key is asserted separately
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY pay_run_id, employee_id, contribution_type ORDER BY amount_usd DESC) = 1
+)
+
+SELECT
+  CONCAT(c.pay_run_id, '|', c.employee_id, '|', c.contribution_type) AS contribution_id,
+  c.pay_run_id,
+  c.employee_id,
+  COALESCE(v.department_id, a.department_id, h.department_id)      AS department_id,
+  CASE
+    WHEN v.department_id IS NOT NULL THEN 'VALID_LINES'
+    WHEN a.department_id IS NOT NULL THEN 'RUN_LINES'
+    ELSE 'HOME_DEPARTMENT'
+  END                                                              AS department_source,
+  r.pay_date,
+  DATE_TRUNC(r.pay_date, MONTH)                                    AS pay_month,
+  c.contribution_type,
+  c.amount_usd
+FROM contributions AS c
+JOIN run_dates AS r
+  ON r.pay_run_id = c.pay_run_id
+LEFT JOIN valid_line_department AS v
+  ON v.pay_run_id = c.pay_run_id AND v.employee_id = c.employee_id
+LEFT JOIN any_line_department AS a
+  ON a.pay_run_id = c.pay_run_id AND a.employee_id = c.employee_id
+LEFT JOIN ${ref("dim_employee_department_history")} AS h
+  ON h.employee_id = c.employee_id
+ AND r.pay_date BETWEEN h.valid_from AND h.valid_to

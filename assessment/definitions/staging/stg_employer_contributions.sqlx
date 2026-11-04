@@ -1,0 +1,14 @@
+config {
+  type: "view",
+  schema: "staging",
+  description: "Typed employer contributions. Grain: one row per pay run, employee and contribution type."
+}
+
+SELECT
+  TRIM(CAST(pay_run_id AS STRING))                                         AS pay_run_id,
+  UPPER(TRIM(CAST(employee_id AS STRING)))                                 AS employee_id,
+  UPPER(TRIM(CAST(contribution_type AS STRING)))                           AS contribution_type,
+  SAFE_CAST(REPLACE(TRIM(CAST(amount_usd AS STRING)), ',', '') AS NUMERIC) AS amount_usd,
+  CAST(amount_usd AS STRING)                                               AS amount_usd_raw,
+  STARTS_WITH(UPPER(TRIM(CAST(employee_id AS STRING))), 'TEST')            AS is_test_account
+FROM ${ref("employer_contributions")}

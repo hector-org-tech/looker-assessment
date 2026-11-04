@@ -1,0 +1,37 @@
+config {
+  type: "view",
+  schema: "staging",
+  description: "Typed employee snapshots. Grain: one row per employee per load snapshot (_loaded_at). A new snapshot is written when an attribute changes, e.g. a department transfer.",
+  columns: {
+    email: "Lower-cased. Some snapshots arrive in upper case for the same person.",
+    department_id: "NULL in a few snapshots; filled from the payroll cost center in dim_employee_department_history.",
+    is_test_account: "TEST-xxx ids or job title 'Test Account'.",
+    snapshot_rank: "1 = most recent snapshot of the employee."
+  }
+}
+
+WITH typed AS (
+  SELECT
+    UPPER(TRIM(CAST(employee_id AS STRING)))                         AS employee_id,
+    INITCAP(TRIM(CAST(first_name AS STRING)))                        AS first_name,
+    INITCAP(TRIM(CAST(last_name AS STRING)))                         AS last_name,
+    LOWER(TRIM(CAST(email AS STRING)))                               AS email,
+    NULLIF(UPPER(TRIM(CAST(department_id AS STRING))), '')           AS department_id,
+    TRIM(CAST(job_title AS STRING))                                  AS job_title,
+    UPPER(TRIM(CAST(employment_type AS STRING)))                     AS employment_type,
+    NULLIF(UPPER(TRIM(CAST(flsa_status AS STRING))), '')             AS flsa_status,
+    SAFE_CAST(CAST(hire_date AS STRING) AS DATE)                     AS hire_date,
+    SAFE_CAST(NULLIF(CAST(termination_date AS STRING), '') AS DATE)  AS termination_date,
+    NULLIF(UPPER(TRIM(CAST(termination_reason AS STRING))), '')      AS termination_reason,
+    UPPER(TRIM(CAST(location_state AS STRING)))                      AS location_state,
+    SAFE_CAST(CAST(annual_salary_usd AS STRING) AS NUMERIC)          AS annual_salary_usd,
+    SAFE_CAST(CAST(hourly_rate_usd AS STRING) AS NUMERIC)            AS hourly_rate_usd,
+    SAFE_CAST(REPLACE(CAST(_loaded_at AS STRING), ' UTC', '') AS TIMESTAMP) AS loaded_at
+  FROM ${ref("employees")}
+)
+
+SELECT
+  t.*,
+  (STARTS_WITH(t.employee_id, 'TEST') OR t.job_title = 'Test Account') AS is_test_account,
+  ROW_NUMBER() OVER (PARTITION BY t.employee_id ORDER BY t.loaded_at DESC) AS snapshot_rank
+FROM typed AS t

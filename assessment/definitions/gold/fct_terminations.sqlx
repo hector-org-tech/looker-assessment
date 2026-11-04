@@ -1,0 +1,26 @@
+config {
+  type: "table",
+  schema: "gold",
+  description: "Terminations. Grain: one row per terminated headcount-eligible employee. The department is the home department on the termination date.",
+  assertions: {
+    uniqueKey: ["employee_id"],
+    nonNull: ["employee_id", "termination_date", "termination_reason", "department_id"]
+  }
+}
+
+SELECT
+  e.employee_id,
+  e.termination_date,
+  DATE_TRUNC(e.termination_date, MONTH)     AS termination_month,
+  e.termination_reason,
+  e.termination_reason = 'VOLUNTARY'        AS is_voluntary,
+  h.department_id,
+  e.employment_type,
+  e.job_title,
+  DATE_DIFF(e.termination_date, e.hire_date, DAY) / 365.25 AS tenure_years
+FROM ${ref("dim_employee")} AS e
+JOIN ${ref("dim_employee_department_history")} AS h
+  ON h.employee_id = e.employee_id
+ AND e.termination_date BETWEEN h.valid_from AND h.valid_to
+WHERE e.termination_date IS NOT NULL
+  AND e.is_headcount_eligible

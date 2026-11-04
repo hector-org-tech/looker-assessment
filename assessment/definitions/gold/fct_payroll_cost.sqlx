@@ -1,0 +1,47 @@
+config {
+  type: "table",
+  schema: "gold",
+  description: "Unified payroll cost fact for detailed analysis in Looker. Grain: one cost component = either one valid earning line or one employer contribution row. Stacking both facts at a common grain (instead of joining them) means every total is a plain SUM and can never fan out.",
+  bigquery: {
+    partitionBy: "DATE_TRUNC(pay_date, MONTH)",
+    clusterBy: ["department_id", "cost_category"]
+  },
+  assertions: {
+    uniqueKey: ["cost_component_id"],
+    nonNull: ["cost_component_id", "cost_category", "cost_type", "department_id", "pay_date", "amount_usd"]
+  },
+  columns: {
+    cost_category: "EARNINGS (counts in gross payroll) or EMPLOYER_CONTRIBUTION (counts in employer cost).",
+    cost_type: "REGULAR, OVERTIME, PTO, BONUS, FICA, HEALTH_INSURANCE or RETIREMENT_MATCH."
+  }
+}
+
+SELECT
+  CONCAT('L|', payroll_line_id) AS cost_component_id,
+  'EARNINGS'                    AS cost_category,
+  earning_type                  AS cost_type,
+  payroll_line_id,
+  pay_run_id,
+  employee_id,
+  department_id,
+  pay_date,
+  pay_month,
+  hours,
+  amount_usd
+FROM ${ref("fct_payroll_lines")}
+
+UNION ALL
+
+SELECT
+  CONCAT('C|', contribution_id),
+  'EMPLOYER_CONTRIBUTION',
+  contribution_type,
+  CAST(NULL AS STRING),
+  pay_run_id,
+  employee_id,
+  department_id,
+  pay_date,
+  pay_month,
+  CAST(NULL AS NUMERIC),
+  amount_usd
+FROM ${ref("fct_employer_contributions")}

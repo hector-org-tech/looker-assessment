@@ -1,0 +1,68 @@
+config {
+  type: "table",
+  schema: "gold",
+  description: "Type-2 history of each employee's HOME department, built from the load snapshots. Use it to answer 'which department was this person in on date X'. Exactly one row is valid for any date between hire and today.",
+  assertions: {
+    uniqueKey: ["employee_id", "valid_from"],
+    nonNull: ["employee_id", "department_id", "valid_from", "valid_to"]
+  },
+  columns: {
+    valid_from: "First day the department applies. For the first row this is the hire date; for later rows the snapshot load date (the source has no effective date, so the load date is the best available proxy).",
+    valid_to: "Last day the department applies (inclusive). 9999-12-31 for the current row.",
+    department_source: "SNAPSHOT or PAYROLL_FALLBACK (snapshot had a NULL department; we used the cost center most often charged on the employee's payroll lines)."
+  }
+}
+
+WITH snapshots AS (
+  SELECT employee_id, department_id, hire_date, DATE(loaded_at) AS loaded_date, loaded_at
+  FROM ${ref("stg_employee_snapshots")}
+  WHERE NOT is_test_account
+),
+
+payroll_department AS (
+  -- Most frequently charged cost center per employee: fallback for NULL departments.
+  SELECT employee_id, department_id
+  FROM ${ref("fct_payroll_lines")}
+  GROUP BY employee_id, department_id
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY employee_id ORDER BY COUNT(*) DESC, department_id) = 1
+),
+
+resolved AS (
+  SELECT
+    s.employee_id,
+    COALESCE(s.department_id, p.department_id)                     AS department_id,
+    IF(s.department_id IS NULL, 'PAYROLL_FALLBACK', 'SNAPSHOT')    AS department_source,
+    s.hire_date,
+    s.loaded_date,
+    s.loaded_at
+  FROM snapshots AS s
+  LEFT JOIN payroll_department AS p USING (employee_id)
+),
+
+changes AS (
+  -- Keep only snapshots where the department actually changed (gaps-and-islands).
+  SELECT
+    *,
+    ROW_NUMBER() OVER (PARTITION BY employee_id ORDER BY loaded_at) AS snapshot_seq,
+    LAG(department_id) OVER (PARTITION BY employee_id ORDER BY loaded_at) AS previous_department_id
+  FROM resolved
+),
+
+kept AS (
+  SELECT *
+  FROM changes
+  WHERE snapshot_seq = 1
+     OR department_id IS DISTINCT FROM previous_department_id
+)
+
+SELECT
+  employee_id,
+  department_id,
+  department_source,
+  IF(snapshot_seq = 1, LEAST(hire_date, loaded_date), loaded_date) AS valid_from,
+  COALESCE(
+    DATE_SUB(LEAD(loaded_date) OVER (PARTITION BY employee_id ORDER BY loaded_at), INTERVAL 1 DAY),
+    DATE '9999-12-31'
+  ) AS valid_to,
+  LEAD(loaded_date) OVER (PARTITION BY employee_id ORDER BY loaded_at) IS NULL AS is_current
+FROM kept

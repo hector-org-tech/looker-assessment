@@ -1,0 +1,20 @@
+config {
+  type: "table",
+  schema: "gold",
+  description: "Department dimension. Grain: one row per department.",
+  assertions: {
+    uniqueKey: ["department_id"],
+    nonNull: ["department_id", "department_name", "division"]
+  }
+}
+
+SELECT
+  d.department_id,
+  d.department_name,
+  d.division,
+  d.cost_center,
+  d.manager_employee_id,
+  e.full_name AS manager_name
+FROM ${ref("stg_departments")} AS d
+LEFT JOIN ${ref("dim_employee")} AS e
+  ON e.employee_id = d.manager_employee_id

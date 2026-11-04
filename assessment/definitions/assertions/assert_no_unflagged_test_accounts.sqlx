@@ -1,0 +1,16 @@
+config {
+  type: "assertion",
+  description: "Issue found: TEST-001 and TEST-002 with payroll lines and contributions. They are flagged by id prefix or job title. Fails if an id appears that does not follow the real pattern (E + 4 digits) and is not flagged, e.g. 'QA-01' or 'E1234-TEST'."
+}
+
+SELECT DISTINCT 'employees' AS source, employee_id
+FROM ${ref("stg_employee_snapshots")}
+WHERE NOT is_test_account AND NOT REGEXP_CONTAINS(employee_id, r'^E[0-9]{4}$')
+UNION ALL
+SELECT DISTINCT 'payroll_lines', employee_id
+FROM ${ref("stg_payroll_lines")}
+WHERE NOT is_test_account AND NOT REGEXP_CONTAINS(employee_id, r'^E[0-9]{4}$')
+UNION ALL
+SELECT DISTINCT 'employer_contributions', employee_id
+FROM ${ref("stg_employer_contributions")}
+WHERE NOT is_test_account AND NOT REGEXP_CONTAINS(employee_id, r'^E[0-9]{4}$')

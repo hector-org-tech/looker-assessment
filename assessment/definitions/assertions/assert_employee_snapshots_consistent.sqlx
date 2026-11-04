@@ -1,0 +1,48 @@
+config {
+  type: "assertion",
+  description: "Issues found: several snapshots per employee (department transfers), NULL departments, upper-case e-mails. These are handled. Fails on the cases we do NOT handle: two snapshots at the same load time, termination before hire, salary AND hourly rate (or neither) for a non-contractor, history gaps/overlaps, or an employee still without a department after the payroll fallback."
+}
+
+SELECT 'same_load_time_twice' AS problem, employee_id
+FROM ${ref("stg_employee_snapshots")}
+GROUP BY employee_id, loaded_at
+HAVING COUNT(*) > 1
+
+UNION ALL
+
+SELECT 'termination_before_hire', employee_id
+FROM ${ref("stg_employee_snapshots")}
+WHERE termination_date < hire_date
+
+UNION ALL
+
+SELECT 'pay_rate_ambiguous', employee_id
+FROM ${ref("stg_employee_snapshots")}
+WHERE employment_type <> 'CONTRACTOR'
+  AND ((annual_salary_usd IS NULL) = (hourly_rate_usd IS NULL))
+
+UNION ALL
+
+SELECT 'hire_or_termination_changed_between_snapshots', employee_id
+FROM ${ref("stg_employee_snapshots")}
+GROUP BY employee_id
+HAVING COUNT(DISTINCT hire_date) > 1
+
+UNION ALL
+
+SELECT 'history_gap_or_overlap', employee_id
+FROM (
+  SELECT
+    employee_id,
+    valid_from,
+    LAG(valid_to) OVER (PARTITION BY employee_id ORDER BY valid_from) AS previous_valid_to
+  FROM ${ref("dim_employee_department_history")}
+)
+WHERE previous_valid_to IS NOT NULL
+  AND valid_from <> DATE_ADD(previous_valid_to, INTERVAL 1 DAY)
+
+UNION ALL
+
+SELECT 'department_still_missing', employee_id
+FROM ${ref("dim_employee_department_history")}
+WHERE department_id IS NULL

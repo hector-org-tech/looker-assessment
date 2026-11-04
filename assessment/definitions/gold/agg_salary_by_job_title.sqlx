@@ -1,0 +1,45 @@
+config {
+  type: "table",
+  schema: "gold",
+  description: "Average annualised pay by job title, safe to share with leadership. Grain: one row per job title. Titles held by fewer than min_group_size active employees are suppressed (values NULL) so that no individual's pay can be derived. No department, location or other slicing columns are published, because combining filters is how small groups are re-identified.",
+  assertions: {
+    uniqueKey: ["job_title"],
+    rowConditions: [
+      `is_suppressed OR employee_count >= ${dataform.projectConfig.vars.min_group_size}`,
+      "NOT is_suppressed OR avg_annualized_pay_usd IS NULL"
+    ]
+  },
+  columns: {
+    avg_annualized_pay_usd: "Annual salary for salaried staff; hourly rate x 2,080 hours for full-time hourly staff. Rounded to the nearest $1,000.",
+    is_suppressed: "TRUE when fewer than the minimum group size hold the title."
+  }
+}
+
+WITH population AS (
+  -- Active, full-time employees only: part-time pay cannot be annualised fairly and
+  -- contractors are not on payroll.
+  SELECT
+    job_title,
+    COALESCE(annual_salary_usd, hourly_rate_usd * 2080) AS annualized_pay_usd
+  FROM ${ref("dim_employee")}
+  WHERE employment_type = 'FULL_TIME'
+    AND (termination_date IS NULL OR termination_date > CURRENT_DATE())
+),
+
+by_title AS (
+  SELECT
+    job_title,
+    COUNT(*)                                  AS employee_count,
+    AVG(annualized_pay_usd)                   AS avg_pay,
+    APPROX_QUANTILES(annualized_pay_usd, 2)[OFFSET(1)] AS median_pay
+  FROM population
+  GROUP BY job_title
+)
+
+SELECT
+  job_title,
+  employee_count,
+  employee_count < ${dataform.projectConfig.vars.min_group_size} AS is_suppressed,
+  IF(employee_count < ${dataform.projectConfig.vars.min_group_size}, NULL, ROUND(avg_pay, -3))    AS avg_annualized_pay_usd,
+  IF(employee_count < ${dataform.projectConfig.vars.min_group_size}, NULL, ROUND(median_pay, -3)) AS median_annualized_pay_usd
+FROM by_title

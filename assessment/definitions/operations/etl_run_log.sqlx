@@ -1,0 +1,28 @@
+config {
+  type: "operations",
+  schema: "gold",
+  name: "etl_run_log",
+  hasOutput: true,
+  description: "One row per successful Dataform run. Written LAST, after every gold table and every assertion has passed. Looker's datagroup polls MAX(run_finished_at): a new row = new data = cache invalidation and PDT/aggregate-table rebuild.",
+  dependencies: [
+    "fct_payroll_lines", "fct_employer_contributions", "fct_payroll_cost", "fct_budget_monthly",
+    "fct_workforce_month_end", "fct_terminations", "dim_employee", "dim_department",
+    "dim_employee_department_history", "dim_fiscal_calendar", "agg_department_monthly",
+    "agg_salary_by_job_title",
+    "assert_payroll_amounts_parse", "assert_duplicate_lines_are_identical",
+    "assert_void_lines_reference_posted_lines", "assert_accepted_values",
+    "assert_referential_integrity", "assert_no_unflagged_test_accounts",
+    "assert_gold_excludes_invalid_lines", "assert_gold_reconciles",
+    "assert_employee_snapshots_consistent", "assert_budget_coverage"
+  ]
+}
+
+CREATE TABLE IF NOT EXISTS ${self()} (
+  run_finished_at TIMESTAMP NOT NULL,
+  valid_payroll_lines INT64,
+  max_pay_date DATE
+);
+
+INSERT INTO ${self()} (run_finished_at, valid_payroll_lines, max_pay_date)
+SELECT CURRENT_TIMESTAMP(), COUNT(*), MAX(pay_date)
+FROM ${ref("fct_payroll_lines")};

@@ -1,0 +1,31 @@
+config {
+  type: "assertion",
+  description: "Reconciliation: the dashboard table must add up to the facts it was built from (a broken join in agg_department_monthly would show up here), and every employee/month in the headcount snapshot must have exactly one department."
+}
+
+WITH checks AS (
+  SELECT 'gross_payroll' AS metric,
+         (SELECT SUM(gross_payroll_usd) FROM ${ref("agg_department_monthly")}) AS agg_value,
+         (SELECT SUM(amount_usd) FROM ${ref("fct_payroll_lines")})             AS fact_value
+  UNION ALL
+  SELECT 'employer_cost',
+         (SELECT SUM(employer_cost_usd) FROM ${ref("agg_department_monthly")}),
+         (SELECT SUM(amount_usd) FROM ${ref("fct_employer_contributions")})
+  UNION ALL
+  SELECT 'payroll_cost_union',
+         (SELECT SUM(amount_usd) FROM ${ref("fct_payroll_cost")}),
+         (SELECT SUM(amount_usd) FROM ${ref("fct_payroll_lines")})
+           + (SELECT SUM(amount_usd) FROM ${ref("fct_employer_contributions")})
+  UNION ALL
+  SELECT 'headcount_rows',
+         (SELECT SUM(headcount_month_end) FROM ${ref("agg_department_monthly")}),
+         (SELECT COUNT(*) FROM ${ref("fct_workforce_month_end")})
+  UNION ALL
+  SELECT 'contributions_kept',
+         (SELECT COUNT(*) FROM ${ref("fct_employer_contributions")}),
+         (SELECT COUNT(*) FROM ${ref("stg_employer_contributions")} WHERE NOT is_test_account)
+)
+
+SELECT *
+FROM checks
+WHERE ABS(COALESCE(agg_value, 0) - COALESCE(fact_value, 0)) > 0.01

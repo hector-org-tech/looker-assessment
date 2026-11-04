@@ -1,0 +1,38 @@
+config {
+  type: "assertion",
+  description: "Every payroll line and contribution must belong to a known employee and department; every contribution must belong to a pay run that has payroll lines for that employee. Orphans would be dropped by inner joins or show up as 'unknown' in reports."
+}
+
+SELECT 'line_unknown_employee' AS problem, l.payroll_line_id AS record_id
+FROM ${ref("stg_payroll_lines")} AS l
+LEFT JOIN (SELECT DISTINCT employee_id FROM ${ref("stg_employee_snapshots")}) AS e USING (employee_id)
+WHERE e.employee_id IS NULL
+
+UNION ALL
+
+SELECT 'line_unknown_or_missing_department', l.payroll_line_id
+FROM ${ref("stg_payroll_lines")} AS l
+LEFT JOIN ${ref("stg_departments")} AS d USING (department_id)
+WHERE d.department_id IS NULL
+
+UNION ALL
+
+SELECT 'contribution_without_payroll_lines', CONCAT(c.pay_run_id, '|', c.employee_id)
+FROM ${ref("stg_employer_contributions")} AS c
+LEFT JOIN (SELECT DISTINCT pay_run_id, employee_id FROM ${ref("stg_payroll_lines")}) AS l
+  USING (pay_run_id, employee_id)
+WHERE l.pay_run_id IS NULL
+
+UNION ALL
+
+SELECT 'snapshot_unknown_department', CONCAT(s.employee_id, '|', CAST(s.loaded_at AS STRING))
+FROM ${ref("stg_employee_snapshots")} AS s
+LEFT JOIN ${ref("stg_departments")} AS d USING (department_id)
+WHERE s.department_id IS NOT NULL AND d.department_id IS NULL
+
+UNION ALL
+
+SELECT 'budget_unknown_department', b.department_id
+FROM ${ref("stg_budget")} AS b
+LEFT JOIN ${ref("stg_departments")} AS d USING (department_id)
+WHERE d.department_id IS NULL

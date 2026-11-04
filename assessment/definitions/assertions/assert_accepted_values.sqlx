@@ -1,0 +1,27 @@
+config {
+  type: "assertion",
+  description: "Fails on any code value the model does not know how to treat. A new earning type (e.g. 'RETRO_PAY') would otherwise be silently included in gross payroll but excluded from overtime %, and a new line status could bypass the VOID logic."
+}
+
+SELECT 'earning_type' AS field, earning_type AS value FROM ${ref("stg_payroll_lines")}
+WHERE earning_type IS NULL OR earning_type NOT IN ('REGULAR', 'OVERTIME', 'PTO', 'BONUS')
+UNION ALL
+SELECT 'line_status', line_status FROM ${ref("stg_payroll_lines")}
+WHERE line_status IS NULL OR line_status NOT IN ('POSTED', 'VOID')
+UNION ALL
+SELECT 'contribution_type', contribution_type FROM ${ref("stg_employer_contributions")}
+WHERE contribution_type IS NULL OR contribution_type NOT IN ('FICA', 'HEALTH_INSURANCE', 'RETIREMENT_MATCH')
+UNION ALL
+SELECT 'employment_type', employment_type FROM ${ref("stg_employee_snapshots")}
+WHERE employment_type IS NULL OR employment_type NOT IN ('FULL_TIME', 'PART_TIME', 'CONTRACTOR')
+UNION ALL
+SELECT 'termination_reason', termination_reason FROM ${ref("stg_employee_snapshots")}
+WHERE termination_reason NOT IN ('VOLUNTARY', 'INVOLUNTARY', 'RETIREMENT')
+   OR (termination_date IS NOT NULL AND termination_reason IS NULL)
+   OR (termination_date IS NULL AND termination_reason IS NOT NULL)
+UNION ALL
+SELECT 'pay_date_parse', payroll_line_id FROM ${ref("stg_payroll_lines")}
+WHERE pay_date IS NULL
+UNION ALL
+SELECT 'hire_date_parse', employee_id FROM ${ref("stg_employee_snapshots")}
+WHERE hire_date IS NULL

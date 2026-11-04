@@ -1,0 +1,34 @@
+config {
+  type: "assertion",
+  description: "Guards the fact table itself: no VOID line, no cancelled line, no test account and no duplicate ever reaches gold, whatever change is made to the SQL later."
+}
+
+WITH voided AS (
+  SELECT DISTINCT voids_line_id AS payroll_line_id
+  FROM ${ref("stg_payroll_lines")}
+  WHERE line_status = 'VOID' AND ingestion_rank = 1
+)
+
+SELECT 'cancelled_line_in_gold' AS problem, f.payroll_line_id
+FROM ${ref("fct_payroll_lines")} AS f
+JOIN voided AS v USING (payroll_line_id)
+
+UNION ALL
+
+SELECT 'test_account_in_gold', employee_id
+FROM ${ref("fct_payroll_cost")}
+WHERE STARTS_WITH(employee_id, 'TEST')
+
+UNION ALL
+
+SELECT 'test_account_in_dim_employee', employee_id
+FROM ${ref("dim_employee")}
+WHERE STARTS_WITH(employee_id, 'TEST')
+
+UNION ALL
+
+SELECT 'void_or_unknown_status_in_gold', l.payroll_line_id
+FROM ${ref("fct_payroll_lines")} AS f
+JOIN ${ref("stg_payroll_lines")} AS l
+  ON l.payroll_line_id = f.payroll_line_id AND l.ingestion_rank = 1
+WHERE l.line_status <> 'POSTED'

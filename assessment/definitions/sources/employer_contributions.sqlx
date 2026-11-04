@@ -1,0 +1,6 @@
+config {
+  type: "declaration",
+  schema: dataform.projectConfig.vars.raw_dataset,
+  name: "employer_contributions",
+  description: "Bronze: employer_contributions.csv loaded as-is from the payroll system (all columns treated as untrusted text)."
+}

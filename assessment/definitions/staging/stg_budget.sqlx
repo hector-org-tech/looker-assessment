@@ -1,0 +1,14 @@
+config {
+  type: "view",
+  schema: "staging",
+  description: "Typed monthly budget. Grain: one row per department per calendar month."
+}
+
+SELECT
+  UPPER(TRIM(CAST(department_id AS STRING)))                         AS department_id,
+  UPPER(TRIM(CAST(fiscal_year AS STRING)))                           AS fiscal_year,
+  SAFE_CAST(CAST(fiscal_period AS STRING) AS INT64)                  AS fiscal_period,
+  SAFE.PARSE_DATE('%Y-%m', TRIM(CAST(calendar_month AS STRING)))     AS month_start_date,
+  SAFE_CAST(REPLACE(CAST(budgeted_gross_payroll_usd AS STRING), ',', '') AS NUMERIC) AS budgeted_gross_payroll_usd,
+  SAFE_CAST(CAST(budgeted_headcount AS STRING) AS INT64)             AS budgeted_headcount
+FROM ${ref("budget")}

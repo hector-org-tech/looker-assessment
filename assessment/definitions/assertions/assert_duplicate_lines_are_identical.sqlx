@@ -1,0 +1,17 @@
+config {
+  type: "assertion",
+  description: "Issue found: 42 payroll lines were ingested twice with identical content. We keep the latest ingestion. This fails if a re-ingested line arrives with DIFFERENT business content (amount, hours, employee, department, status...), because then 'keep the latest' is a business decision, not a technical de-duplication."
+}
+
+SELECT payroll_line_id, versions, distinct_contents
+FROM (
+  SELECT
+    payroll_line_id,
+    COUNT(*) AS versions,
+    COUNT(DISTINCT TO_JSON_STRING(STRUCT(
+      pay_run_id, employee_id, department_id, pay_date, earning_type, hours, amount_usd, line_status, voids_line_id
+    ))) AS distinct_contents
+  FROM ${ref("stg_payroll_lines")}
+  GROUP BY payroll_line_id
+)
+WHERE versions > 1 AND distinct_contents > 1

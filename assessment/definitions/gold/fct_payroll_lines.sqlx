@@ -1,0 +1,55 @@
+config {
+  type: "table",
+  schema: "gold",
+  description: "Clean payroll fact. Grain: one row per VALID earning line. Valid = latest ingestion of the line, status POSTED, not cancelled by a VOID line, not a test account.",
+  bigquery: {
+    partitionBy: "DATE_TRUNC(pay_date, MONTH)",
+    clusterBy: ["department_id", "employee_id"]
+  },
+  assertions: {
+    uniqueKey: ["payroll_line_id"],
+    nonNull: ["payroll_line_id", "pay_run_id", "employee_id", "department_id", "pay_date", "earning_type", "amount_usd"]
+  },
+  columns: {
+    department_id: "Department for cost: the cost center charged on the line at the time of payment.",
+    pay_month: "First day of the month of pay_date. Gross payroll is assigned to this month.",
+    amount_usd: "Earning amount in USD."
+  }
+}
+
+WITH latest AS (
+  -- Issue: some lines were ingested twice (same payroll_line_id, later _ingested_at).
+  SELECT *
+  FROM ${ref("stg_payroll_lines")}
+  WHERE ingestion_rank = 1
+),
+
+voided_line_ids AS (
+  -- Issue: a VOID line is a positive-amount line that cancels an earlier POSTED line.
+  -- Both the VOID line and the line it cancels are removed. The corrected amount, if any,
+  -- arrives as a new POSTED line in a later pay run and is kept.
+  SELECT DISTINCT voids_line_id AS payroll_line_id
+  FROM latest
+  WHERE line_status = 'VOID'
+    AND voids_line_id IS NOT NULL
+)
+
+SELECT
+  l.payroll_line_id,
+  l.pay_run_id,
+  l.employee_id,
+  l.department_id,
+  l.pay_period_start,
+  l.pay_period_end,
+  l.pay_date,
+  DATE_TRUNC(l.pay_date, MONTH) AS pay_month,
+  l.earning_type,
+  l.hours,
+  l.amount_usd,
+  l.ingested_at
+FROM latest AS l
+LEFT JOIN voided_line_ids AS v
+  ON v.payroll_line_id = l.payroll_line_id
+WHERE l.line_status = 'POSTED'
+  AND v.payroll_line_id IS NULL      -- not cancelled by a VOID
+  AND NOT l.is_test_account          -- Issue: TEST-001 / TEST-002 synthetic users

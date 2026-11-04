@@ -1,0 +1,23 @@
+config {
+  type: "assertion",
+  description: "Budget variance is meaningless if a department/month has actuals but no budget, or if budget rows are duplicated. Fails on either."
+}
+
+SELECT 'actuals_without_budget' AS problem, department_month_key AS record_id
+FROM ${ref("agg_department_monthly")}
+WHERE gross_payroll_usd > 0 AND budgeted_gross_payroll_usd IS NULL
+
+UNION ALL
+
+SELECT 'duplicate_budget_row', CONCAT(department_id, '|', CAST(month_start_date AS STRING))
+FROM ${ref("stg_budget")}
+GROUP BY department_id, month_start_date
+HAVING COUNT(*) > 1
+
+UNION ALL
+
+SELECT 'budget_fiscal_label_mismatch', CONCAT(b.department_id, '|', CAST(b.month_start_date AS STRING))
+FROM ${ref("stg_budget")} AS b
+JOIN ${ref("dim_fiscal_calendar")} AS c
+  ON c.calendar_date = b.month_start_date
+WHERE b.fiscal_year <> c.fiscal_year OR b.fiscal_period <> c.fiscal_period

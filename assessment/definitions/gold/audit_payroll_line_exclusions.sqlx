@@ -1,0 +1,41 @@
+config {
+  type: "view",
+  schema: "gold",
+  description: "Audit trail: every raw payroll line that is NOT in fct_payroll_lines, with the reason. Lets Finance reconcile raw totals to reported totals."
+}
+
+WITH latest_status AS (
+  SELECT payroll_line_id, line_status, voids_line_id
+  FROM ${ref("stg_payroll_lines")}
+  WHERE ingestion_rank = 1
+),
+
+voided AS (
+  SELECT DISTINCT voids_line_id AS payroll_line_id
+  FROM latest_status
+  WHERE line_status = 'VOID'
+)
+
+SELECT
+  s.payroll_line_id,
+  s.pay_run_id,
+  s.employee_id,
+  s.department_id,
+  s.pay_date,
+  s.earning_type,
+  s.amount_usd,
+  s.ingested_at,
+  CASE
+    WHEN s.ingestion_rank > 1          THEN 'DUPLICATE_INGESTION'
+    WHEN s.is_test_account             THEN 'TEST_ACCOUNT'
+    WHEN s.line_status = 'VOID'        THEN 'VOID_LINE'
+    WHEN v.payroll_line_id IS NOT NULL THEN 'CANCELLED_BY_VOID'
+    ELSE 'OTHER'
+  END AS exclusion_reason
+FROM ${ref("stg_payroll_lines")} AS s
+LEFT JOIN voided AS v
+  ON v.payroll_line_id = s.payroll_line_id
+LEFT JOIN ${ref("fct_payroll_lines")} AS f
+  ON f.payroll_line_id = s.payroll_line_id
+ AND s.ingestion_rank = 1
+WHERE f.payroll_line_id IS NULL

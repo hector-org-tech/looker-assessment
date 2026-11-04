@@ -1,0 +1,36 @@
+config {
+  type: "assertion",
+  description: "Issue found: 26 VOID lines with POSITIVE amounts that cancel earlier POSTED lines (summing them would double count). Fails if a VOID line points to nothing, points to another VOID, belongs to another employee, has a different amount from the line it cancels, or if a POSTED line carries voids_line_id."
+}
+
+WITH latest AS (
+  SELECT * FROM ${ref("stg_payroll_lines")} WHERE ingestion_rank = 1
+)
+
+SELECT
+  v.payroll_line_id,
+  v.voids_line_id,
+  CASE
+    WHEN o.payroll_line_id IS NULL           THEN 'VOID_TARGET_NOT_FOUND'
+    WHEN o.line_status <> 'POSTED'           THEN 'VOID_TARGET_NOT_POSTED'
+    WHEN o.employee_id <> v.employee_id      THEN 'VOID_TARGET_OTHER_EMPLOYEE'
+    WHEN o.amount_usd <> v.amount_usd        THEN 'VOID_AMOUNT_MISMATCH'
+  END AS problem
+FROM latest AS v
+LEFT JOIN latest AS o
+  ON o.payroll_line_id = v.voids_line_id
+WHERE v.line_status = 'VOID'
+  AND (o.payroll_line_id IS NULL OR o.line_status <> 'POSTED'
+       OR o.employee_id <> v.employee_id OR o.amount_usd <> v.amount_usd)
+
+UNION ALL
+
+SELECT payroll_line_id, voids_line_id, 'VOID_WITHOUT_TARGET_ID'
+FROM latest
+WHERE line_status = 'VOID' AND voids_line_id IS NULL
+
+UNION ALL
+
+SELECT payroll_line_id, voids_line_id, 'POSTED_LINE_WITH_VOIDS_ID'
+FROM latest
+WHERE line_status = 'POSTED' AND voids_line_id IS NOT NULL

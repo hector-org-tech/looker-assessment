@@ -1,0 +1,9 @@
+# Dataform (core v3) workflow settings
+defaultProject: control-electoral-510800   # GCP project used for the assessment
+defaultLocation: US
+defaultDataset: gold
+defaultAssertionDataset: dataform_assertions
+dataformCoreVersion: 3.0.0
+vars:
+  raw_dataset: looker                      # bronze layer: the 5 CSVs loaded as-is
+  min_group_size: "5"                      # k-anonymity threshold for salary aggregates

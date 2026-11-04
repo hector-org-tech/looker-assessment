@@ -1,0 +1,13 @@
+config {
+  type: "view",
+  schema: "staging",
+  description: "Typed departments. Grain: one row per department."
+}
+
+SELECT
+  UPPER(TRIM(CAST(department_id AS STRING)))        AS department_id,
+  TRIM(CAST(department_name AS STRING))             AS department_name,
+  TRIM(CAST(division AS STRING))                    AS division,
+  UPPER(TRIM(CAST(cost_center AS STRING)))          AS cost_center,
+  UPPER(TRIM(CAST(manager_employee_id AS STRING)))  AS manager_employee_id
+FROM ${ref("departments")}

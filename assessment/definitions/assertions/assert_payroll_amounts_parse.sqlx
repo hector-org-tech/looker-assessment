@@ -1,0 +1,20 @@
+config {
+  type: "assertion",
+  description: "Issue found: amounts with thousands separators ('2,195.20'). Staging strips commas. Fails if any NEW amount format cannot be parsed (e.g. '$2.195,20', 'N/A'), instead of silently becoming NULL and dropping out of totals."
+}
+
+SELECT 'payroll_lines' AS source, payroll_line_id AS record_id, amount_usd_raw
+FROM ${ref("stg_payroll_lines")}
+WHERE amount_usd_raw IS NOT NULL AND amount_usd IS NULL
+
+UNION ALL
+
+SELECT 'employer_contributions', CONCAT(pay_run_id, '|', employee_id, '|', contribution_type), amount_usd_raw
+FROM ${ref("stg_employer_contributions")}
+WHERE amount_usd_raw IS NOT NULL AND amount_usd IS NULL
+
+UNION ALL
+
+SELECT 'payroll_lines_negative_or_null', payroll_line_id, amount_usd_raw
+FROM ${ref("stg_payroll_lines")}
+WHERE amount_usd IS NULL OR amount_usd <= 0
